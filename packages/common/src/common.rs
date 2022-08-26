@@ -534,7 +534,7 @@ pub fn enable_hook(opts: Option<InjectOptions>) -> anyhow::Result<()> {
             typem,
             data,
             pcbdata | {
-                detour_reg_query_value(opts, hkey, value_name, reserved, typem, data, pcbdata)
+                detour_reg_query_value(hkey, value_name, reserved, typem, data, pcbdata)
             },
         )?;
         info!("HookRegQueryValueExA initialized");
