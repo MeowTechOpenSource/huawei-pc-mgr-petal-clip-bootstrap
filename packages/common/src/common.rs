@@ -265,10 +265,10 @@ fn detour_reg_query_value(
     lpcbdata: LP_CBDATA,
 ) -> LSTATUS {
     info!(
-        "Calling ReqQueryValue: {}, {}, {}, {}, {}",
+        "Calling ReqQueryValue: {}, {}, {}, {}, {}, {}",
         hkey, lpvaluename, lpreserved, lptype, lpdata, lpcbdata
     );
-    unsafe { HookRegQueryValueExA.call(hkey, lpvaluename, lpreserved, lptype, lpdata, lpcbdata) }
+    unsafe { HookRegQueryValueExA.call(hkey, lpvaluename, lpreserved, lptype, lpdata, lpcbdata,) }
 }
 fn detour_get_system_firmware_table(
     firmwaretableprovidersignature: FIRMWARE_TABLE_PROVIDER,
