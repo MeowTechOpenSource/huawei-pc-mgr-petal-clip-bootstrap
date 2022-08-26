@@ -128,8 +128,10 @@ static_detour! {
     static HookRegQueryValueExA: unsafe extern "system" fn(
         HKEY,
         PCSTR,
-        PSTR,
-        PLONG,
+        PDWORD,
+        PDWORD,
+        PBYTE,
+        PDWORD,
     ) -> LSTATUS;
 }
 
@@ -252,19 +254,24 @@ fn replace_smbios_manufacturer(mut smbios_data: Vec<u8>) -> Vec<u8> {
     }
 }
 fn detour_reg_query_value(
-    // HKEY,
-    //     PCSTR,
-    //     PSTR,
-    //     PLONG
+    // [in]                HKEY    hKey,
+    // [in, optional]      LPCSTR  lpValueName,
+    //                     LPDWORD lpReserved,
+    // [out, optional]     LPDWORD lpType,
+    // [out, optional]     LPBYTE  lpData,
+    // [in, out, optional] LPDWORD lpcbData
     hkey: HKEY,
-    lpsubkey: PCSTR,
-    lpdata:PSTR,
+    lpvaluename: PCSTR,
+    lpreserved: PDWORD,
+    lptype: PDWORD,
+    lpdata: PBYTE,
+    lpcbdata: PDWORD,
 ) -> LSTATUS {
     info!(
-        "Calling ReqQueryValue: {}, {}, {}",
-        hkey, llpsubkey,lpdata
+        "Calling ReqQueryValue: {}, {}, {}, {}, {}, {}",
+        hkey, lpvaluename, lpreserved, lptype, lpdata, lpcbdata
     );
-    unsafe { HookRegQueryValueExA.call(hkey, llpsubkey,lpdata) }
+    unsafe { HookRegQueryValueExA.call(hkey, lpvaluename, lpreserved, lptype, lpdata, lpcbdata,) }
 }
 fn detour_get_system_firmware_table(
     firmwaretableprovidersignature: FIRMWARE_TABLE_PROVIDER,
@@ -520,8 +527,14 @@ pub fn enable_hook(opts: Option<InjectOptions>) -> anyhow::Result<()> {
         )?;
         info!("HookGetSystemFirmwareTable initialized");
         HookRegQueryValueExA.initialize(
-            hkey, llpsubkey,lpdata | {
-                detour_reg_query_value(hkey, llpsubkey,lpdata)
+            fp_reg_query_value,
+            hkey,
+            value_name,
+            reserved,
+            typem,
+            data,
+            pcbdata | {
+                detour_reg_query_value(opts, hkey, value_name, reserved, typem, data, pcbdata)
             },
         )?;
         info!("HookRegQueryValueExA initialized");
