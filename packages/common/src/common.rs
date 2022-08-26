@@ -105,7 +105,7 @@ type FnGetSystemFirmwareTable = unsafe extern "system" fn(
 ) -> u32;
 
 static_detour! {
-    
+
     static HookCreateProcessW: unsafe extern "system" fn(
         PCWSTR,
         PWSTR,
@@ -118,7 +118,7 @@ static_detour! {
         *const STARTUPINFOW,
         *mut PROCESS_INFORMATION
     ) -> BOOL;
-    
+
   static HookGetSystemFirmwareTable: unsafe extern "system" fn(
         u32,
         u32,
@@ -132,7 +132,15 @@ static_detour! {
         PDWORD,
         PBYTE,
         PDWORD,
-    ) -> LSTATUS;
+    ) -> u32;
+    // static HookRegQueryValueExA: unsafe extern "system" fn(
+    //     HKEY,
+    //     PCSTR,
+    //     PDWORD,
+    //     PDWORD,
+    //     PBYTE,
+    //     PDWORD,
+    // ) -> LSTATUS;
 }
 
 static LIBRARY_NAME: &str = "huawei_pc_manager_bootstrap_core.dll";
@@ -271,7 +279,7 @@ fn detour_reg_query_value(
         "Calling ReqQueryValue: {}, {}, {}, {}, {}, {}",
         hkey, lpvaluename, lpreserved, lptype, lpdata, lpcbdata
     );
-    unsafe { HookRegQueryValueExA.call(hkey, lpvaluename, lpreserved, lptype, lpdata, lpcbdata,) }
+    unsafe { HookRegQueryValueExA.call(hkey, lpvaluename, lpreserved, lptype, lpdata, lpcbdata) }
 }
 fn detour_get_system_firmware_table(
     firmwaretableprovidersignature: FIRMWARE_TABLE_PROVIDER,
@@ -533,9 +541,7 @@ pub fn enable_hook(opts: Option<InjectOptions>) -> anyhow::Result<()> {
             reserved,
             typem,
             data,
-            pcbdata | {
-                detour_reg_query_value(hkey, value_name, reserved, typem, data, pcbdata)
-            },
+            pcbdata | { detour_reg_query_value(hkey, value_name, reserved, typem, data, pcbdata) },
         )?;
         info!("HookRegQueryValueExA initialized");
         HookCreateProcessW.initialize(
