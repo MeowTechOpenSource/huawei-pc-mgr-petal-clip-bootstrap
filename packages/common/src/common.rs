@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 use detour::static_detour;
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
@@ -104,6 +105,7 @@ type FnGetSystemFirmwareTable = unsafe extern "system" fn(
 ) -> u32;
 
 static_detour! {
+    
     static HookCreateProcessW: unsafe extern "system" fn(
         PCWSTR,
         PWSTR,
@@ -116,20 +118,19 @@ static_detour! {
         *const STARTUPINFOW,
         *mut PROCESS_INFORMATION
     ) -> BOOL;
-    static HookRegQueryValueExA: unsafe extern "system" fn(
-        HKEY,
-        PCSTR,
-        PDWORD,
-        PDWORD,
-        PBYTE,
-        PDWORD,
-    ) -> LSTATUS;
+    
   static HookGetSystemFirmwareTable: unsafe extern "system" fn(
         u32,
         u32,
         *mut c_void,
         u32
     ) -> u32;
+    static HookRegQueryValueExA: unsafe extern "system" fn(
+        HKEY,
+        PCSTR,
+        PSTR,
+        PLONG,
+    ) -> LSTATUS;
 }
 
 static LIBRARY_NAME: &str = "huawei_pc_manager_bootstrap_core.dll";
@@ -251,24 +252,19 @@ fn replace_smbios_manufacturer(mut smbios_data: Vec<u8>) -> Vec<u8> {
     }
 }
 fn detour_reg_query_value(
-    // [in]                HKEY    hKey,
-    // [in, optional]      LPCSTR  lpValueName,
-    //                     LPDWORD lpReserved,
-    // [out, optional]     LPDWORD lpType,
-    // [out, optional]     LPBYTE  lpData,
-    // [in, out, optional] LPDWORD lpcbData
+    // HKEY,
+    //     PCSTR,
+    //     PSTR,
+    //     PLONG
     hkey: HKEY,
-    lpvaluename: LP_VALUE_NAME,
-    lpreserved: LP_RESERVED,
-    lptype: LP_TYPE,
-    lpdata: LP_DATA,
-    lpcbdata: LP_CBDATA,
+    lpsubkey: PCSTR,
+    lpdata:PSTR,
 ) -> LSTATUS {
     info!(
-        "Calling ReqQueryValue: {}, {}, {}, {}, {}, {}",
-        hkey, lpvaluename, lpreserved, lptype, lpdata, lpcbdata
+        "Calling ReqQueryValue: {}, {}, {}",
+        hkey, llpsubkey,lpdata
     );
-    unsafe { HookRegQueryValueExA.call(hkey, lpvaluename, lpreserved, lptype, lpdata, lpcbdata,) }
+    unsafe { HookRegQueryValueExA.call(hkey, llpsubkey,lpdata) }
 }
 fn detour_get_system_firmware_table(
     firmwaretableprovidersignature: FIRMWARE_TABLE_PROVIDER,
@@ -524,14 +520,8 @@ pub fn enable_hook(opts: Option<InjectOptions>) -> anyhow::Result<()> {
         )?;
         info!("HookGetSystemFirmwareTable initialized");
         HookRegQueryValueExA.initialize(
-            fp_reg_query_value,
-            hkey,
-            value_name,
-            reserved,
-            typem,
-            data,
-            pcbdata | {
-                detour_req_query_value(opts, hkey, value_name, reserved, typem, data, pcbdata)
+            hkey, llpsubkey,lpdata | {
+                detour_reg_query_value(hkey, llpsubkey,lpdata)
             },
         )?;
         info!("HookRegQueryValueExA initialized");
