@@ -262,7 +262,7 @@ fn detour_reg_query_value(
     lpreserved: LP_RESERVED,
     lptype: LP_TYPE,
     lpdata: LP_DATA,
-    lpcbdata: LP_PCBDATA,
+    lpcbdata: LP_CBDATA,
 ) -> LSTATUS {
     info!(
         "Calling ReqQueryValue: {}, {}, {}, {}, {}",
