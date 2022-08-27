@@ -1,4 +1,3 @@
-#![recursion_limit = "256"]
 use detour::static_detour;
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
@@ -14,12 +13,15 @@ use widestring::{U16CString, WideCString};
 use windows_sys::{
     core::{PCWSTR, PWSTR},
     Win32::{
-        Foundation::{GetLastError, BOOL, HANDLE},
+        Foundation::{GetLastError, BOOL, HANDLE, WIN32_ERROR},
         Security::SECURITY_ATTRIBUTES,
         System::{
             Diagnostics::Debug::{WriteProcessMemory, PROCESSOR_ARCHITECTURE_INTEL},
             LibraryLoader::{GetModuleFileNameW, GetProcAddress, LoadLibraryW},
             Memory::{VirtualAllocEx, MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READWRITE},
+            // 在你添加了 feature 之后，你在 vscode 中输入类型名称后，一般会有提示，回车之后会自动添加这一条 use。
+            // 有时候可能不会出现，多输入几个字符，甚至完全输入之后应该会出现。另外，可以完全输入之后，在报错的地方悬浮，点击 quick fix 然后导入也可。
+            Registry::{HKEY, REG_VALUE_TYPE},
             SystemInformation::{
                 GetNativeSystemInfo, GetSystemDirectoryW, FIRMWARE_TABLE_ID,
                 FIRMWARE_TABLE_PROVIDER, SYSTEM_INFO,
@@ -103,9 +105,16 @@ type FnGetSystemFirmwareTable = unsafe extern "system" fn(
     *mut ::core::ffi::c_void,
     u32,
 ) -> u32;
+type FnHookRegQueryValueExW = unsafe extern "system" fn(
+    HKEY,
+    PCWSTR,
+    *mut u32,
+    *mut REG_VALUE_TYPE,
+    *mut u8,
+    *mut u32,
+) -> WIN32_ERROR;
 
 static_detour! {
-
     static HookCreateProcessW: unsafe extern "system" fn(
         PCWSTR,
         PWSTR,
@@ -125,14 +134,18 @@ static_detour! {
         *mut c_void,
         u32
     ) -> u32;
-    static HookRegQueryValueExA: unsafe extern "system" fn(
+
+    // 优先使用 W 系列函数，Windows 中 A 系列函数一般是 ANSI 编码，而 Rust 是 UTF-8 编码，会导致乱码。
+    // 对于函数的签名，先在 windows-sys 这个 crate 里面搜索，然后看一下需要哪些 features，将其添加到 Cargo.toml 中。
+    static HookRegQueryValueExW: unsafe extern "system" fn(
         HKEY,
-        PCSTR,
-        PDWORD,
-        PDWORD,
-        PBYTE,
-        PDWORD,
-    ) -> u32;
+        PCWSTR,
+        *mut u32,
+        *mut REG_VALUE_TYPE,
+        *mut u8,
+        *mut u32 // 最后位置不可加多余的逗号，static_detour 解析会出错（不需要加 recursion_limit）。
+    ) -> WIN32_ERROR;
+
     // static HookRegQueryValueExA: unsafe extern "system" fn(
     //     HKEY,
     //     PCSTR,
@@ -262,6 +275,7 @@ fn replace_smbios_manufacturer(mut smbios_data: Vec<u8>) -> Vec<u8> {
     }
 }
 fn detour_reg_query_value(
+    // see: https://docs.rs/windows-sys/latest/windows_sys/Win32/System/Registry/fn.RegQueryValueExW.html
     // [in]                HKEY    hKey,
     // [in, optional]      LPCSTR  lpValueName,
     //                     LPDWORD lpReserved,
@@ -269,17 +283,22 @@ fn detour_reg_query_value(
     // [out, optional]     LPBYTE  lpData,
     // [in, out, optional] LPDWORD lpcbData
     hkey: HKEY,
-    lpvaluename: PCSTR,
-    lpreserved: PDWORD,
-    lptype: PDWORD,
-    lpdata: PBYTE,
-    lpcbdata: PDWORD,
-) -> LSTATUS {
+    lpvaluename: PCWSTR,
+    lpreserved: *mut u32,
+    lptype: *mut REG_VALUE_TYPE,
+    lpdata: *mut u8,
+    lpcbdata: *mut u32,
+) -> WIN32_ERROR {
     info!(
-        "Calling ReqQueryValue: {}, {}, {}, {}, {}, {}",
-        hkey, lpvaluename, lpreserved, lptype, lpdata, lpcbdata
+        "Calling ReqQueryValue: {}, {}, {}, {:?}, {}, {}",
+        hkey,
+        lpvaluename as usize,
+        lpreserved as usize,
+        unsafe { lptype.as_ref() },
+        lpdata as usize,
+        lpcbdata as usize
     );
-    unsafe { HookRegQueryValueExA.call(hkey, lpvaluename, lpreserved, lptype, lpdata, lpcbdata) }
+    unsafe { HookRegQueryValueExW.call(hkey, lpvaluename, lpreserved, lptype, lpdata, lpcbdata) }
 }
 fn detour_get_system_firmware_table(
     firmwaretableprovidersignature: FIRMWARE_TABLE_PROVIDER,
@@ -528,20 +547,21 @@ pub fn enable_hook(opts: Option<InjectOptions>) -> anyhow::Result<()> {
             fp_get_system_firmware_table as usize
         );
 
+        let fp_reg_query_value: FnHookRegQueryValueExW =
+            transmute(get_proc_address("RegQueryValueExW", "Advapi32.dll")?);
+        info!("Got RegQueryValueExW: 0x{:x}", fp_reg_query_value as usize);
+
         let opts = Box::leak(Box::new(opts));
         HookGetSystemFirmwareTable.initialize(
             fp_get_system_firmware_table,
             detour_get_system_firmware_table,
         )?;
         info!("HookGetSystemFirmwareTable initialized");
-        HookRegQueryValueExA.initialize(
+        HookRegQueryValueExW.initialize(
             fp_reg_query_value,
-            hkey,
-            value_name,
-            reserved,
-            typem,
-            data,
-            pcbdata | { detour_reg_query_value(hkey, value_name, reserved, typem, data, pcbdata) },
+            |hkey, value_name, reserved, typem, data, pcbdata| {
+                detour_reg_query_value(hkey, value_name, reserved, typem, data, pcbdata)
+            },
         )?;
         info!("HookRegQueryValueExA initialized");
         HookCreateProcessW.initialize(
